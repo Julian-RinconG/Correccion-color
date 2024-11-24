@@ -1,0 +1,188 @@
+# Instalar dependencias necesarias
+!pip install opencv-contrib-python matplotlib rawpy
+
+# Importar bibliotecas necesarias
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import rawpy  # Para manejar archivos RAW como .ARW
+from google.colab import files
+
+# Función para leer archivos RAW (.ARW) y convertirlos a BGR
+def leer_arw_como_bgr(ruta_archivo):
+    try:
+        with rawpy.imread(ruta_archivo) as raw:
+            rgb_image = raw.postprocess()  # Procesar la imagen RAW a RGB
+            bgr_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)  # Convertir a BGR para OpenCV
+            return bgr_image
+    except Exception as e:
+        print(f"Error al leer el archivo RAW {ruta_archivo}: {e}")
+        return None
+
+# Función para mostrar imágenes
+def mostrar_imagen(titulo, imagen):
+    if imagen is not None:
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB))  # Convertir BGR a RGB
+        plt.title(titulo)
+        plt.axis('off')
+        plt.show()
+    else:
+        print(f"Error: La imagen '{titulo}' no se pudo cargar.")
+
+# Subir imágenes desde la computadora
+print("Sube las imágenes necesarias (flor e imagen de patrón de calibración):")
+uploaded_files = files.upload()
+
+# Obtener las rutas de los archivos cargados
+file_list = list(uploaded_files.keys())
+
+if len(file_list) != 2:
+    raise ValueError("Error: Debes subir exactamente dos imágenes: una de la flor y otra del patrón de calibración.")
+
+# Solicitar al usuario que especifique qué archivo es qué imagen
+print("Selecciona cuál es la imagen de la flor:")
+print(f"1. {file_list[0]}")
+print(f"2. {file_list[1]}")
+selection = input("Escribe el número correspondiente (1 o 2): ")
+
+if selection == "1":
+    flower_image_path = file_list[0]
+    pattern_image_path = file_list[1]
+elif selection == "2":
+    flower_image_path = file_list[1]
+    pattern_image_path = file_list[0]
+else:
+    raise ValueError("Selección inválida. Debes elegir entre 1 o 2.")
+
+# Determinar si los archivos son RAW o no
+def cargar_imagen(ruta):
+    if ruta.lower().endswith(".arw"):
+        return leer_arw_como_bgr(ruta)  # Leer RAW
+    else:
+        # Leer imágenes comunes (JPG, PNG, etc.)
+        return cv2.imdecode(np.frombuffer(uploaded_files[ruta], np.uint8), cv2.IMREAD_COLOR)
+
+# Cargar imágenes
+flower_image = cargar_imagen(flower_image_path)
+pattern_image = cargar_imagen(pattern_image_path)
+
+# Verificar si las imágenes se cargaron correctamente
+if flower_image is None:
+    raise ValueError("Error: No se pudo cargar la imagen de la flor. Verifica que subiste el archivo correcto.")
+if pattern_image is None:
+    raise ValueError("Error: No se pudo cargar la imagen del patrón de calibración. Verifica que subiste el archivo correcto.")
+
+# Mostrar imágenes cargadas
+mostrar_imagen("Imagen Original (Flor)", flower_image)
+mostrar_imagen("Imagen de Patrón de Calibración", pattern_image)
+
+# Función para extraer colores promedio del patrón
+def extraer_colores_patron(imagen_patron, filas=4, columnas=6):
+    """
+    Extrae colores promedio de las celdas en la carta de calibración.
+    """
+    h, w, _ = imagen_patron.shape
+    cell_h, cell_w = h // filas, w // columnas
+    colores = []
+    for i in range(filas):
+        for j in range(columnas):
+            x1, y1 = j * cell_w, i * cell_h
+            x2, y2 = (j + 1) * cell_w, (i + 1) * cell_h
+            # Extraer la celda y calcular el color promedio
+            celda = imagen_patron[y1:y2, x1:x2]
+            color_promedio = np.mean(celda, axis=(0, 1))  # RGB
+            colores.append(color_promedio)
+    return np.array(colores)
+
+# Extraer colores promedio del patrón de calibración
+colores_patron = extraer_colores_patron(pattern_image)
+
+# Usar los colores extraídos como referencia directa
+colores_referencia = colores_patron / 255.0
+
+# Normalizar colores extraídos de la imagen
+def extraer_colores_imagen(imagen, filas=4, columnas=6):
+    """
+    Extrae colores promedio de las mismas regiones de la imagen que en el patrón.
+    """
+    return extraer_colores_patron(imagen, filas, columnas) / 255.0
+
+colores_imagen = extraer_colores_imagen(pattern_image)
+
+# Calcular la matriz de corrección (3x3)
+def calcular_matriz_correccion(valores_reales, valores_referencia):
+    """
+    Calcula la matriz de corrección de color.
+    """
+    A, _, _, _ = np.linalg.lstsq(valores_reales, valores_referencia, rcond=None)
+    return A.T
+
+matriz_correccion = calcular_matriz_correccion(colores_imagen, colores_referencia)
+
+# Aplicar la matriz de corrección
+def aplicar_correccion(imagen, matriz):
+    """
+    Aplica la matriz de corrección a una imagen.
+    """
+    imagen_float = imagen.astype(np.float32) / 255.0
+    h, w, c = imagen_float.shape
+    imagen_reshaped = imagen_float.reshape((-1, 3))
+    imagen_corregida = np.dot(imagen_reshaped, matriz.T)
+    imagen_corregida = np.clip(imagen_corregida, 0, 1)
+    imagen_corregida = (imagen_corregida.reshape((h, w, c)) * 255).astype(np.uint8)
+    return imagen_corregida
+
+imagen_corregida = aplicar_correccion(flower_image, matriz_correccion)
+
+# Mostrar y guardar la imagen corregida
+mostrar_imagen("Imagen Corregida (Nueva)", imagen_corregida)
+cv2.imwrite("/content/imagen_corregida.jpg", imagen_corregida)
+
+# Aplicar métodos de linealización
+def aplicar_linealizacion(imagen, metodo):
+    """
+    Aplica un método de linealización a la imagen corregida.
+    """
+    if metodo == "LINEARIZATION_IDENTITY":
+        return imagen
+    elif metodo == "LINEARIZATION_GAMMA":
+        gamma = 2.2
+        inv_gamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        return cv2.LUT(imagen, table)
+    elif metodo == "LINEARIZATION_COLORPOLYFIT":
+        return cv2.convertScaleAbs(imagen, alpha=1.2, beta=10)
+    elif metodo == "LINEARIZATION_COLORLOGPOLYFIT":
+        log_image = np.log1p(imagen.astype(np.float32))
+        return cv2.normalize(log_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    elif metodo == "LINEARIZATION_GRAYPOLYFIT":
+        gray = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+        return cv2.merge([gray, gray, gray])
+    elif metodo == "LINEARIZATION_GRAYLOGPOLYFIT":
+        gray = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+        log_image = np.log1p(gray.astype(np.float32))
+        return cv2.normalize(log_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    else:
+        raise ValueError("Método de linealización no soportado")
+
+# Métodos de inicialización y linealización
+metodos_inicializacion = ["WHITE_BALANCE", "LEAST_SQUARE"]
+metodos_linealizacion = [
+    "LINEARIZATION_IDENTITY",
+    "LINEARIZATION_GAMMA",
+    "LINEARIZATION_COLORPOLYFIT",
+    "LINEARIZATION_COLORLOGPOLYFIT",
+    "LINEARIZATION_GRAYPOLYFIT",
+    "LINEARIZATION_GRAYLOGPOLYFIT"
+]
+
+# Aplicar combinaciones de inicialización y linealización
+for metodo_inicial in metodos_inicializacion:
+    # Aquí podrías aplicar ajustes específicos dependiendo de la inicialización
+    imagen_corregida = aplicar_correccion(flower_image, matriz_correccion)
+    mostrar_imagen(f"Corrección: {metodo_inicial}", imagen_corregida)
+    
+    for metodo_lineal in metodos_linealizacion:
+        imagen_linealizada = aplicar_linealizacion(imagen_corregida, metodo_lineal)
+        mostrar_imagen(f"Inicialización: {metodo_inicial}, Linealización: {metodo_lineal}", imagen_linealizada)
