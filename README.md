@@ -1,2 +1,3 @@
-# Correccion-color
-En el siguiente repositorio se muestra el desarrollo del proyecto de calibración de color de imágenes a cultivos de papa 
+# Sistema de detección de color en flores a través de imágenes de cultivos de papa
+
+Este proyecto es una solución
