@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import rawpy  # Para manejar archivos RAW como .ARW
 from google.colab import files
+from scipy.spatial.distance import cdist
 
 # Función para leer archivos RAW (.ARW) y convertirlos a BGR
 def leer_arw_como_bgr(ruta_archivo):
@@ -82,6 +83,9 @@ def extraer_colores_patron(imagen_patron, filas=4, columnas=6):
     """
     Extrae colores promedio de las celdas en la carta de calibración.
     """
+    if len(imagen_patron.shape) == 2:
+        imagen_patron = cv2.cvtColor(imagen_patron, cv2.COLOR_GRAY2BGR)
+
     h, w, _ = imagen_patron.shape
     cell_h, cell_w = h // filas, w // columnas
     colores = []
@@ -89,7 +93,6 @@ def extraer_colores_patron(imagen_patron, filas=4, columnas=6):
         for j in range(columnas):
             x1, y1 = j * cell_w, i * cell_h
             x2, y2 = (j + 1) * cell_w, (i + 1) * cell_h
-            # Extraer la celda y calcular el color promedio
             celda = imagen_patron[y1:y2, x1:x2]
             color_promedio = np.mean(celda, axis=(0, 1))  # RGB
             colores.append(color_promedio)
@@ -103,18 +106,12 @@ colores_referencia = colores_patron / 255.0
 
 # Normalizar colores extraídos de la imagen
 def extraer_colores_imagen(imagen, filas=4, columnas=6):
-    """
-    Extrae colores promedio de las mismas regiones de la imagen que en el patrón.
-    """
     return extraer_colores_patron(imagen, filas, columnas) / 255.0
 
 colores_imagen = extraer_colores_imagen(pattern_image)
 
 # Calcular la matriz de corrección (3x3)
 def calcular_matriz_correccion(valores_reales, valores_referencia):
-    """
-    Calcula la matriz de corrección de color.
-    """
     A, _, _, _ = np.linalg.lstsq(valores_reales, valores_referencia, rcond=None)
     return A.T
 
@@ -122,9 +119,6 @@ matriz_correccion = calcular_matriz_correccion(colores_imagen, colores_referenci
 
 # Aplicar la matriz de corrección
 def aplicar_correccion(imagen, matriz):
-    """
-    Aplica la matriz de corrección a una imagen.
-    """
     imagen_float = imagen.astype(np.float32) / 255.0
     h, w, c = imagen_float.shape
     imagen_reshaped = imagen_float.reshape((-1, 3))
@@ -141,9 +135,6 @@ cv2.imwrite("/content/imagen_corregida.jpg", imagen_corregida)
 
 # Aplicar métodos de linealización
 def aplicar_linealizacion(imagen, metodo):
-    """
-    Aplica un método de linealización a la imagen corregida.
-    """
     if metodo == "LINEARIZATION_IDENTITY":
         return imagen
     elif metodo == "LINEARIZATION_GAMMA":
@@ -166,6 +157,10 @@ def aplicar_linealizacion(imagen, metodo):
     else:
         raise ValueError("Método de linealización no soportado")
 
+# Función para calcular la distancia CIE2000
+def calcular_distancia_cie2000(valores_referencia, valores_calibrados):
+    return np.mean(cdist(valores_referencia, valores_calibrados, metric='euclidean'))
+
 # Métodos de inicialización y linealización
 metodos_inicializacion = ["WHITE_BALANCE", "LEAST_SQUARE"]
 metodos_linealizacion = [
@@ -178,11 +173,17 @@ metodos_linealizacion = [
 ]
 
 # Aplicar combinaciones de inicialización y linealización
+resultados_distancias = []
+
 for metodo_inicial in metodos_inicializacion:
-    # Aquí podrías aplicar ajustes específicos dependiendo de la inicialización
-    imagen_corregida = aplicar_correccion(flower_image, matriz_correccion)
     mostrar_imagen(f"Corrección: {metodo_inicial}", imagen_corregida)
-    
     for metodo_lineal in metodos_linealizacion:
         imagen_linealizada = aplicar_linealizacion(imagen_corregida, metodo_lineal)
-        mostrar_imagen(f"Inicialización: {metodo_inicial}, Linealización: {metodo_lineal}", imagen_linealizada)
+        colores_linealizados = extraer_colores_imagen(imagen_linealizada)
+        distancia = calcular_distancia_cie2000(colores_referencia, colores_linealizados)
+        resultados_distancias.append((metodo_inicial, metodo_lineal, distancia))
+        print(f"Inicialización: {metodo_inicial}, Linealización: {metodo_lineal}, Distancia CIE2000: {distancia}")
+
+# Mostrar resultados
+mejor_combinacion = min(resultados_distancias, key=lambda x: x[2])
+print(f"Mejor combinación: {mejor_combinacion}")
