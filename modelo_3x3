@@ -182,8 +182,11 @@ for metodo_inicial in metodos_inicializacion:
         colores_linealizados = extraer_colores_imagen(imagen_linealizada)
         distancia = calcular_distancia_cie2000(colores_referencia, colores_linealizados)
         resultados_distancias.append((metodo_inicial, metodo_lineal, distancia))
-        print(f"Inicialización: {metodo_inicial}, Linealización: {metodo_lineal}, Distancia CIE2000: {distancia}")
+        mostrar_imagen(f"Inicialización: {metodo_inicial}, Linealización: {metodo_lineal}", imagen_linealizada)
+        print(f"Método Inicialización: {metodo_inicial}, Método Linealización: {metodo_lineal}, Distancia CIE2000: {distancia}")
 
-# Mostrar resultados
+# Mostrar la mejor combinación
 mejor_combinacion = min(resultados_distancias, key=lambda x: x[2])
 print(f"Mejor combinación: {mejor_combinacion}")
+
+
