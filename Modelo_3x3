@@ -1,0 +1,242 @@
+# Instalación de dependencias en Colab
+!pip install opencv-contrib-python-headless scikit-image rawpy
+!pip install opencv-contrib-python matplotlib rawpy
+
+# Importación de bibliotecas necesarias
+import cv2  # Procesamiento de imágenes
+import numpy as np  # Operaciones numéricas
+import rawpy  # Manejo de imágenes RAW
+import matplotlib.pyplot as plt  # Visualización
+from skimage.color import deltaE_ciede2000  # Cálculo de diferencias de color
+from google.colab import files  # Subida de archivos en Colab
+from skimage.color import rgb2lab  # Conversión de espacios de color
+
+# Función para la lectura de la imagen
+def read_image(image_path):
+    """
+    Lee una imagen en formato .ARW o .jpg y la convierte a BGR.
+
+    Args:
+        image_path (str): Ruta de la imagen
+
+    Returns:
+        numpy.ndarray: Imagen en formato BGR
+    """
+    # Verificar si es imagen RAW
+    is_raw = ".ARW" in image_path or ".NEF" in image_path
+
+    if is_raw:
+        # Procesar imagen RAW
+        with rawpy.imread(image_path) as raw:
+            rgb = raw.postprocess()
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    else:
+        # Leer imagen JPEG/PNG
+        return cv2.imread(image_path)
+
+
+# Función para la extracción de Valores del ColorChecker
+def extract_color_checker_values(color_checker_img):
+    """
+    Detecta el patrón de calibración (ColorChecker) y extrae los valores RGB.
+
+    Args:
+        color_checker_img (numpy.ndarray): Imagen del ColorChecker
+
+    Returns:
+        tuple: Valores RGB normalizados y objeto del checker
+    """
+    # Crear detector de ColorChecker
+    detector = cv2.mcc.CCheckerDetector.create()
+
+    # Procesar imagen y detectar patrón
+    if not detector.process(image=color_checker_img, chartType=0):
+        raise ValueError("No se detectó el patrón de calibración (ColorChecker).")
+
+    # Obtener el primer checker detectado
+    checker = detector.getListColorChecker()[0]
+    charts_rgb = checker.getChartsRGB()
+
+    # Reorganizar y normalizar valores RGB
+    src = charts_rgb[:, 1].copy().reshape(int(len(charts_rgb[:])/3), 1, 3)
+    src /= 255.0
+    return src, checker
+
+
+#Función para la creación del modelo de Corrección de Color
+def create_color_correction_model(src, initial_type, linearization):
+    """
+    Crea un modelo de corrección de color con los parámetros especificados.
+
+    Args:
+        src (numpy.ndarray): Valores de color de referencia
+        initial_type (int): Método de inicialización
+        linearization (int): Método de linealización
+
+    Returns:
+        cv2.ccm_ColorCorrectionModel: Modelo de corrección de color
+    """
+    # Crear modelo de corrección de color
+    model = cv2.ccm_ColorCorrectionModel(src, cv2.ccm.COLORCHECKER_Macbeth)
+
+    # Configurar parámetros del modelo
+    model.setCCM_TYPE(cv2.ccm.CCM_3x3)   # Se define el uso de una matriz 3x3
+    model.setInitialMethod(initial_type) # Se determina la inicialización
+    model.setLinear(linearization)       # Se determina el método de linealización
+
+    # Ejecutar modelo
+    model.run()
+
+    return model
+
+
+# Función para aplicar la corrección de color
+def apply_color_correction(model, target_image):
+    """
+    Aplica el modelo de corrección de color a la imagen objetivo.
+
+    Args:
+        model (cv2.ccm_ColorCorrectionModel): Modelo de corrección
+        target_image (numpy.ndarray): Imagen a corregir
+
+    Returns:
+        numpy.ndarray: Imagen corregida en BGR
+    """
+    # Convertir imagen a RGB y normalizar
+    target_image_rgb = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB).astype(np.float64) / 255.0
+
+    # Aplicar corrección de color
+    corrected_image = model.infer(target_image_rgb)
+
+    # Escalar y convertir imagen
+    corrected_image_bgr = np.clip(corrected_image * 255, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(corrected_image_bgr, cv2.COLOR_RGB2BGR)
+
+# Función para la visualización de Imágenes
+def show_images(original_img, corrected_imgs, titles):
+    """
+    Muestra la imagen original y cada imagen corregida en figuras separadas.
+
+    Args:
+        original_img (numpy.ndarray): Imagen original
+        corrected_imgs (list): Lista de imágenes corregidas
+        titles (list): Títulos para cada imagen
+    """
+    # Mostrar imagen original
+    plt.figure(figsize=(8, 6))
+    plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
+    plt.title("Original")
+    plt.axis("off")
+    plt.show()
+
+    # Mostrar imágenes corregidas
+    for i, img in enumerate(corrected_imgs):
+        plt.figure(figsize=(8, 6))
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        plt.title(titles[i])
+        plt.axis("off")
+        plt.show()
+
+### Bloque de ejecución principal ###
+
+# Subir imágenes al entorno de Colab
+print("Sube la imagen de la flor:")
+uploaded_flower = files.upload()
+
+print("Sube la imagen del patrón de calibración:")
+uploaded_checker = files.upload()
+
+flower_image_path = list(uploaded_flower.keys())[0]
+color_checker_path = list(uploaded_checker.keys())[0]
+
+# Leer imágenes
+flower_img = read_image(flower_image_path)
+color_checker_img = read_image(color_checker_path)
+
+# Detectar patrón de calibración y extraer valores RGB
+src_colors, checker = extract_color_checker_values(color_checker_img)
+
+# Valores estándar del ColorChecker en espacio CIE Lab (aproximados)
+cie_reference_lab = np.array([
+[37.986, 13.555, 14.059],  # Dark Skin
+[65.711, 18.130, 17.810],  # Light Skin
+[49.927, -4.880, -21.925], # Blue Sky
+[43.139, -13.095, 21.905], # Foliage
+[55.112, 8.844, -25.399],  # Blue Flower
+[70.719, -33.397, -0.199], # Bluish Green
+[62.661, 36.067, 57.096],  # Orange
+[40.020, 10.410, -45.964], # Purplish Blue
+[51.124, 48.239, 16.248],  # Moderate Red
+[30.325, 22.976, -21.587], # Purple
+[72.532, -23.709, 57.255], # Yellow Green
+[71.941, 19.363, 67.857],  # Orange Yellow
+[28.778, 14.179, -50.297], # Blue
+[55.261, -38.342, 31.370], # Green
+[42.101, 53.378, 28.190],  # Red
+[81.7334,-5,-5],
+[51,-28,-28],
+[43,-23,-5],
+[95,-1,-1],
+[81,-1,-1],
+[66,-1,-1],
+[50,-1,-1],
+[35,-1,-1],
+[20,-1,-1]
+])
+
+
+# Configuraciones a probar
+initial_types = [
+    cv2.ccm.INITIAL_METHOD_WHITE_BALANCE,  # Método válido
+    cv2.ccm.INITIAL_METHOD_LEAST_SQUARE   # Método válido
+]
+
+linearization_methods = [
+    cv2.ccm.LINEARIZATION_IDENTITY,
+    cv2.ccm.LINEARIZATION_GAMMA,
+    cv2.ccm.LINEARIZATION_COLORPOLYFIT,
+    cv2.ccm.LINEARIZATION_COLORLOGPOLYFIT,
+    cv2.ccm.LINEARIZATION_GRAYPOLYFIT,
+    cv2.ccm.LINEARIZATION_GRAYLOGPOLYFIT
+]
+
+
+corrected_images = []
+titles = []
+losses = []
+
+print("Probando combinaciones...")
+
+try:
+    for initial_type in initial_types:
+        for linearization in linearization_methods:
+            print(f"Probando: initial_type={initial_type}, linearization={linearization}")
+
+            # Crear modelo
+            model = create_color_correction_model(src_colors, initial_type, linearization)
+
+            # Aplicar corrección
+            corrected_img = apply_color_correction(model, flower_img)
+            corrected_images.append(corrected_img)
+
+            # Verificar estadísticas básicas de la imagen corregida
+            print(f"Promedio RGB imagen corregida: {np.mean(corrected_img, axis=(0, 1))}")
+
+            # Calcular pérdida
+            loss = model.getLoss()
+
+            losses.append(loss)
+            titles.append(f"Loss: {loss:.4f}\nInit: {initial_type}, Lin: {linearization}")
+            print("Se tiene un error de: ", loss)
+
+# Mensaje de error en caso de ser necesario
+except Exception as e:
+    print(f"Error durante la corrección de color: {e}")
+
+# Mostrar resultados
+print("Mostrando resultados...")
+show_images(flower_img, corrected_images, titles)
+
+# Mostrar combinación con menor pérdida
+mejor_loss_idx = np.argmin(losses)
+print(f"Mejor combinación: {titles[mejor_loss_idx]} con pérdida {losses[mejor_loss_idx]:.4f}")
